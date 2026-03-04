@@ -27,6 +27,6 @@ app.use("/api/chat/", chatRoutes);
 //   console.log(`Server is running on ${PORT}`);
 //   connectDB();
 app.listen(PORT, () => {
-  console.log('Server is running on ${PORT}');
+  console.log(`Server is running on ${PORT}`);
   connectDB();
 });
