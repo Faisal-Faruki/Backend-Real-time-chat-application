@@ -1,14 +1,13 @@
-
 import User from "../models/User.js";
 import jwt from "jsonwebtoken";
 import { upsertStreamUser } from "../lib/stream.js";
 
 
 export async function signup(req, res) {
-    const { fullName, password, email } = req.body;
+    const { fullName, password, Email } = req.body;
 
     try {
-        if (!fullName || !password || !email) {
+        if (!fullName || !password || !Email) {
             return res.status(400).json({ message: 'All fields are required' });
         }
 
@@ -16,139 +15,156 @@ export async function signup(req, res) {
             return res.status(400).json({ message: 'Password must be at least 6 characters long' });
         }
 
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        const EmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-        if (!emailRegex.test(email)) {
-            return res.status(400).json({ message: "Invalid email format" });
+        if (!EmailRegex.test(Email)) {
+            return res.status(400).json({ message: "Invalid Email format" });
         }
 
-        // Proceed with saving user or any other logic here
-        
-const existingUser = await User.findOne({ email });
+        const existingUser = await User.findOne({ Email });
 
-if (existingUser) {
-    return res.status(400).json({ message: 'User with this email already exists' });
-}
+        if (existingUser) {
+            return res.status(400).json({ message: 'User with this Email already exists' });
+        }
 
-const idx=Math.floor(Math.random() * 100)+1;
- const randomAvatar = `https://avatar.iran.liara.run/public/${idx}.png`;
- 
- 
-    const newUser = await User.create({
-      email,
-      fullName,
-      password,
-      profilePicture: randomAvatar,
-    });
+        const idx = Math.floor(Math.random() * 100) + 1;
+        const randomAvatar = `https://avatar.iran.liara.run/public/${idx}.png`;
 
-    try {
-      await upsertStreamUser({
-        id: newUser._id.toString(),
-        name: newUser.fullName,
-        image: newUser.profilePicture || "",
-      });
-      console.log(`Stream user created for ${newUser.fullName}`);
-    } catch (error) {
-      console.log("Error creating Stream user:", error);
-    }
+        const newUser = await User.create({
+            Email,
+            fullName,
+            password,
+            profilePicture: randomAvatar,
+        });
 
-const token= jwt.sign({userId:newUser._id}, process.env.JWT_SECRET, { expiresIn: '30d' });
+        try {
+            await upsertStreamUser({
+                id: newUser._id.toString(),
+                name: newUser.fullName,
+                image: newUser.profilePicture || "",
+            });
+            console.log(`Stream user created for ${newUser.fullName}`);
+        } catch (error) {
+            console.log("Error creating Stream user:", error);
+        }
 
-res.cookie('jwt', token, {
-    maxAge: 30* 24 * 60 * 60 * 1000, // 30 days 7 * 24 * 60 * 60 * 1000, // 7 days
-    httpOnly: true,
-    sameSite: 'Strict', 
-    secure: process.env.NODE_ENV === 'production', // Use secure cookies in production
-})
-res.status(201).json({ success:true,user:newUser});
+        const token = jwt.sign({ userId: newUser._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
+
+        res.cookie('jwt', token, {
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+            sameSite: 'Strict',
+            secure: process.env.NODE_ENV === 'production',
+        });
+
+        // ✅ FIX 1: Never send password hash in response
+        const userResponse = { ...newUser._doc };
+        delete userResponse.password;
+
+        res.status(201).json({ success: true, user: userResponse });
 
     } catch (error) {
         console.error('Error during signup:', error);
-         res.status(500).json({ message: 'Internal server error' });
+        res.status(500).json({ message: 'Internal server error' });
     }
 }
 
 export async function login(req, res) {
-     try {
-    const { email, password } = req.body;
+    try {
+        const { Email, password } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: "All fields are required" });
+        if (!Email || !password) {
+            return res.status(400).json({ message: "All fields are required" });
+        }
+
+        // ✅ FIX 2: Explicitly select password field (in case select:false is added to schema later)
+        const user = await User.findOne({ Email }).select('+password');
+        if (!user) return res.status(401).json({ message: "Invalid Email or password" });
+
+        // ✅ FIX 3: Check if password is undefined before comparing
+        if (!user.password) {
+            console.error("User found but password field is missing/undefined for:", Email);
+            return res.status(500).json({ message: "Account error. Please re-register." });
+        }
+
+        const isPasswordCorrect = await user.matchPassword(password);
+        if (!isPasswordCorrect) return res.status(401).json({ message: "Invalid Email or password" });
+
+        const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
+            expiresIn: "30d",
+        });
+
+        res.cookie("jwt", token, {
+            maxAge: 30 * 24 * 60 * 60 * 1000,
+            httpOnly: true,
+            sameSite: "strict",
+            secure: process.env.NODE_ENV === "production",
+        });
+
+        // ✅ FIX 4: Never send password hash in response
+        const userResponse = { ...user._doc };
+        delete userResponse.password;
+
+        res.status(200).json({ success: true, user: userResponse });
+    } catch (error) {
+        console.log("Error in login controller", error.message);
+        res.status(500).json({ message: "Internal Server Error" });
     }
-
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: "Invalid email or password" });
-
-    const isPasswordCorrect = await user.matchPassword(password);
-    if (!isPasswordCorrect) return res.status(401).json({ message: "Invalid email or password" });
-
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "30d",
-    });
-
-    res.cookie("jwt", token, {
-      maxAge: 30 * 24 * 60 * 60 * 1000,
-      httpOnly: true, // prevent XSS attacks,
-      sameSite: "strict", // prevent CSRF attacks
-      secure: process.env.NODE_ENV === "production",
-    });
-
-    res.status(200).json({ success: true, user });
-  } catch (error) {
-    console.log("Error in login controller", error.message);
-    res.status(500).json({ message: "Internal Server Error" });
-  }
-}   
+}
 
 export function logout(req, res) {
-    res.clearCookie('jwt' );
-      res.status(200).json({ success: true, message: "Logout successful" });
+    res.clearCookie('jwt');
+    res.status(200).json({ success: true, message: "Logout successful" });
 }
 
 export async function onboard(req, res) {
-  try {
-    const userId = req.user._id;
+    try {
+        const userId = req.user._id;
 
-    const { FullName, bio, nativeLanguage, learningLanguage, location } = req.body;
+        const { fullName, bio, nativeLanguage, learningLanguage, location } = req.body;
 
-    if (!FullName || !bio || !nativeLanguage || !learningLanguage || !location) {
-      return res.status(400).json({
-        message: "All fields are required",
-        missingFields: [
-          !FullName && "FullName",
-          !bio && "bio",
-          !nativeLanguage && "nativeLanguage",
-          !learningLanguage && "learningLanguage",
-          !location && "location",
-        ].filter(Boolean),
-      });
+        if (!fullName || !bio || !nativeLanguage || !learningLanguage || !location) {
+            return res.status(400).json({
+                message: "All fields are required",
+                missingFields: [
+                    !fullName && "fullName",
+                    !bio && "bio",
+                    !nativeLanguage && "nativeLanguage",
+                    !learningLanguage && "learningLanguage",
+                    !location && "location",
+                ].filter(Boolean),
+            });
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            {
+                fullName,
+                bio,
+                nativeLanguage,
+                learningLanguage,
+                location,
+                isOnboarded: true,
+            },
+            { new: true }
+        );
+
+        if (!updatedUser) return res.status(404).json({ message: "User not found" });
+
+        try {
+            await upsertStreamUser({
+                id: updatedUser._id.toString(),
+                name: updatedUser.fullName,
+                image: updatedUser.profilePicture || "",
+            });
+            console.log(`Stream user updated after onboarding for ${updatedUser.fullName}`);
+        } catch (streamError) {
+            console.log("Error updating Stream user during onboarding:", streamError.message);
+        }
+
+        res.status(200).json({ success: true, user: updatedUser });
+    } catch (error) {
+        console.error("Onboarding error:", error);
+        res.status(500).json({ message: "Internal Server Error" });
     }
-
-    const updatedUser = await User.findByIdAndUpdate(
-      userId,
-      {
-        ...req.body,
-        isOnboarded: true,
-      },
-      { new: true }
-    );
-
-    if (!updatedUser) return res.status(404).json({ message: "User not found" });
-
-    try { 
-      await upsertStreamUser({
-        id: updatedUser._id.toString(),
-        name: updatedUser.FullName,
-        image: updatedUser.profilePic || "",
-      });
-      console.log(`Stream user updated after onboarding for ${updatedUser.FullName}`);
-    } catch (streamError) {
-      console.log("Error updating Stream user during onboarding:", streamError.message);
-    }
-
-    res.status(200).json({ success: true, user: updatedUser });
-  } catch (error) {
-    console.error("Onboarding error:", error);
-    res.status(500).json({ message: "Internal Server Error" });
-  }
 }
